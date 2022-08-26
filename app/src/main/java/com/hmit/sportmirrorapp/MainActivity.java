@@ -4,16 +4,21 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 
 import android.app.Activity;
+import android.app.DownloadManager;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
 import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.util.Log;
 import android.view.KeyEvent;
+import android.webkit.CookieManager;
+import android.webkit.DownloadListener;
 import android.webkit.JavascriptInterface;
+import android.webkit.URLUtil;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -25,6 +30,9 @@ import android.widget.Toast;
 import com.google.android.gms.tasks.OnCompleteListener;
 import com.google.android.gms.tasks.Task;
 import com.google.firebase.messaging.FirebaseMessaging;
+
+import java.io.UnsupportedEncodingException;
+import java.net.URLDecoder;
 
 
 public class MainActivity extends AppCompatActivity {
@@ -45,6 +53,7 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+        //환경설정
         webView1 = (WebView) findViewById(R.id.webView1);
         webSettings = webView1.getSettings();
         webSettings.setJavaScriptEnabled(true);         // 자바스크립트 사용
@@ -61,8 +70,13 @@ public class MainActivity extends AppCompatActivity {
 
         webView1.loadUrl("http://27.96.134.216:8080/");
 //        webView1.loadUrl("http://10.0.2.2:8080/");  //로컬 서버 띄우기
-//        webView1.setWebChromeClient(new WebChromeClient());  //웹뷰에 크롬 사용 허용. 이 부분이 없으면 크롬에서 alert가 뜨지 않음
+
+        //웹뷰 파일 다운로드 처리
+        webView1.setDownloadListener(new MyWebViewClient());
+
+        //웹뷰에 크롬 사용 허용, 이 부분이 없으면 크롬에서 alert가 뜨지 않음
         webView1.setWebChromeClient(new WebChromeClient(){
+            //이미지 업로드 갤러리 허용
             @Override
             public boolean onShowFileChooser(WebView webView, ValueCallback filePathCallback, FileChooserParams fileChooserParams) {
                 mFilePathCallback = filePathCallback;
@@ -73,15 +87,17 @@ public class MainActivity extends AppCompatActivity {
                 intent.addCategory(Intent.CATEGORY_OPENABLE);
 //                intent.setType("image/*");
 //                intent.setType("video/*");
-                intent.setType("image/* video/*");
+                intent.setType("image/* video/mp4");
                 startActivityForResult(Intent.createChooser(intent, "Select picture"), IMAGE_SELECTOR_REQ);
                 return true;
             }
         });  //웹뷰에 크롬 사용 허용. 이 부분이 없으면 크롬에서 alert가 뜨지 않음
 
-
+        //주소창 숨김
         webView1.setWebViewClient(new WebViewClientClass());
-        webView1.addJavascriptInterface(new AndroidBridge(), "token"); //자바스크립트에 대응할 함수를 정의한 클래스 붙여줌
+
+        //자바스크립트에 대응할 함수를 정의한 클래스 붙여줌
+        webView1.addJavascriptInterface(new AndroidBridge(), "token");
     }
 
     private class WebViewClientClass extends WebViewClient {
@@ -184,5 +200,65 @@ public class MainActivity extends AppCompatActivity {
 
         }
     }
+
+
+    /* WebViewClient 를 상속받는 MyDownloadListener 클래스를 만들어 DownloadListener 를 구현해준다 */
+    private class MyWebViewClient extends WebViewClient implements DownloadListener {
+
+        @Override
+        public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimeType, long contentLength) {
+            Log.d("Handler", "***** onDownloadStart()");
+            Log.d("Handler", "***** onDownloadStart() - url : " + url);
+            Log.d("Handler", "***** onDownloadStart() - userAgent : " + userAgent);
+            Log.d("Handler", "***** onDownloadStart() - contentDisposition : " + contentDisposition);
+            Log.d("Handler", "***** onDownloadStart() - mimeType : " + mimeType);
+
+            // 파일명 잘라내기 및 확장자 확인
+            String fileName = contentDisposition;
+            if (fileName != null && fileName.length() > 0) {
+                int idxFileName = fileName.indexOf("filename=");
+                if (idxFileName > -1) {
+                    fileName = fileName.substring(idxFileName + 9).trim();
+                }
+                if (fileName.endsWith(";")) {
+                    fileName = fileName.substring(0, fileName.length() - 1);
+                }
+                if (fileName.startsWith("\"") && fileName.startsWith("\"")) {
+                    fileName = fileName.substring(1, fileName.length() - 1);
+                }
+            }else{
+                // 파일명(확장자포함) 확인이 안되었을 때 기존방식으로 진행
+                fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
+            }
+
+            //권한 체크
+//          if(권한 여부) {
+            //권한이 있으면 처리
+            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+            request.setMimeType(mimeType);
+
+            //------------------------COOKIE!!------------------------
+            String cookies = CookieManager.getInstance().getCookie(url);
+            request.addRequestHeader("cookie", cookies);
+            //------------------------COOKIE!!------------------------
+
+            request.addRequestHeader("User-Agent", userAgent);
+            request.setDescription("Downloading file...");
+//            request.setTitle(URLUtil.guessFileName(url, contentDisposition, mimeType));
+            request.setTitle(fileName);
+            request.allowScanningByMediaScanner();
+            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+//            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, URLUtil.guessFileName(url, contentDisposition, mimeType));
+            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+            DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+            dm.enqueue(request);
+            Toast.makeText(getApplicationContext(), "파일을 다운로드합니다.", Toast.LENGTH_LONG).show();
+
+//          } else {
+            //권한이 없으면 처리
+//          }
+        }
+    }
+
 
 }

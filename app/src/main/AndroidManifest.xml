@@ -38,6 +38,7 @@
             </intent-filter>
         </activity>
 
+
         <service
             android:name=".MyFireBaseMessagingService"
             android:enabled="true"
